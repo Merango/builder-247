@@ -19,15 +19,21 @@ setup(
         "aiohttp>=3.8.0",
         "fastapi>=0.68.0",
         "uvicorn>=0.15.0",
-        "pytest-asyncio>=0.18.0",
         "httpx>=0.24.0",
-        "pytest-cov>=3.0.0",
         "alembic>=1.7.0",
         "psycopg2-binary>=2.9.0",
         "redis>=4.0.0",
         "celery>=5.2.0",
         "flower>=1.0.0",
     ],
+    extras_require={
+        'dev': [
+            'pytest>=7.0.0',
+            'pytest-asyncio>=0.18.0',
+            'pytest-cov>=3.0.0',
+            'pytest-xdist>=2.0.0',
+        ]
+    },
     python_requires=">=3.8",
     author="Your Name",
     description="A framework for building AI agents",
