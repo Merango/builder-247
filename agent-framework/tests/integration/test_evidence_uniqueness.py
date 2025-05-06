@@ -1,7 +1,7 @@
 import pytest
 from prometheus_swarm.database.database import SessionLocal
-from prometheus_swarm.utils.evidence_validator import EvidenceValidator
-from prometheus_swarm.tools.uniqueness.implementations import UniqueEvidenceTools
+from prometheus_swarm.uniqueness.validator import EvidenceValidator
+from prometheus_swarm.uniqueness.tools import UniqueEvidenceTools
 import uuid
 import time
 
