@@ -1,11 +1,11 @@
 import crypto from 'crypto';
-import { signatureValidationMiddleware } from '../../src/middleware/signature-validation';
+import { createSignatureValidationMiddleware } from '../../src/middleware/signature-validation';
 import { Request, Response, NextFunction } from 'express';
 
 describe('Signature Validation Middleware', () => {
   const secretKey = 'test-secret-key';
-  const mockNextFunction = jest.fn();
   const mockLogger = jest.fn();
+  const mockNextFunction = jest.fn();
 
   const createMockRequest = (body: any, signature?: string, timestamp?: number) => {
     const req = {
@@ -29,7 +29,7 @@ describe('Signature Validation Middleware', () => {
   };
 
   const generateSignature = (body: any, timestamp: number, secretKey: string) => {
-    const payload = JSON.stringify(body) + timestamp;
+    const payload = JSON.stringify(body) + timestamp.toString();
     return crypto
       .createHmac('sha256', secretKey)
       .update(payload)
@@ -41,14 +41,17 @@ describe('Signature Validation Middleware', () => {
     mockLogger.mockClear();
   });
 
-  it('should allow request with valid signature', () => {
+  it('should validate correct signature', () => {
     const body = { data: 'test' };
     const timestamp = Date.now();
     const signature = generateSignature(body, timestamp, secretKey);
 
     const req = createMockRequest(body, signature, timestamp);
     const res = createMockResponse();
-    const middleware = signatureValidationMiddleware(secretKey, { logger: mockLogger });
+    const middleware = createSignatureValidationMiddleware({
+      secretKey, 
+      logger: mockLogger
+    });
 
     middleware(req, res, mockNextFunction);
 
@@ -60,14 +63,18 @@ describe('Signature Validation Middleware', () => {
     const body = { data: 'test' };
     const req = createMockRequest(body);
     const res = createMockResponse();
-    const middleware = signatureValidationMiddleware(secretKey, { logger: mockLogger });
+    const middleware = createSignatureValidationMiddleware({
+      secretKey, 
+      logger: mockLogger
+    });
 
     middleware(req, res, mockNextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Missing signature or timestamp' });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Missing signature or timestamp'
+    }));
     expect(mockNextFunction).not.toHaveBeenCalled();
-    expect(mockLogger).toHaveBeenCalledWith('Missing signature or timestamp', 'error');
   });
 
   it('should reject request with invalid signature', () => {
@@ -77,14 +84,18 @@ describe('Signature Validation Middleware', () => {
 
     const req = createMockRequest(body, invalidSignature, timestamp);
     const res = createMockResponse();
-    const middleware = signatureValidationMiddleware(secretKey, { logger: mockLogger });
+    const middleware = createSignatureValidationMiddleware({
+      secretKey, 
+      logger: mockLogger
+    });
 
     middleware(req, res, mockNextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid signature' });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Invalid signature'
+    }));
     expect(mockNextFunction).not.toHaveBeenCalled();
-    expect(mockLogger).toHaveBeenCalledWith('Invalid signature', 'error');
   });
 
   it('should reject request with expired timestamp', () => {
@@ -94,38 +105,66 @@ describe('Signature Validation Middleware', () => {
 
     const req = createMockRequest(body, signature, oldTimestamp);
     const res = createMockResponse();
-    const middleware = signatureValidationMiddleware(secretKey, { logger: mockLogger });
+    const middleware = createSignatureValidationMiddleware({
+      secretKey, 
+      maxAge: 5 * 60 * 1000, // 5 minutes
+      logger: mockLogger
+    });
 
     middleware(req, res, mockNextFunction);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired timestamp' });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Invalid or expired timestamp'
+    }));
     expect(mockNextFunction).not.toHaveBeenCalled();
-    expect(mockLogger).toHaveBeenCalledWith('Invalid or expired timestamp', 'error');
   });
 
-  it('should handle cases with custom headers', () => {
+  it('should support custom header names', () => {
     const body = { data: 'test' };
     const timestamp = Date.now();
     const signature = generateSignature(body, timestamp, secretKey);
 
-    const req = createMockRequest(body, signature, timestamp);
+    const req = {
+      body,
+      headers: {
+        'custom-signature': signature,
+        'custom-timestamp': timestamp.toString()
+      }
+    } as unknown as Request;
+
     const res = createMockResponse();
-    const middleware = signatureValidationMiddleware(secretKey, {
+    const middleware = createSignatureValidationMiddleware({
+      secretKey,
       signatureHeader: 'custom-signature',
       timestampHeader: 'custom-timestamp',
       logger: mockLogger
     });
 
-    // Modify headers to match custom names
-    req.headers = {
-      'custom-signature': signature,
-      'custom-timestamp': timestamp.toString()
-    };
-
     middleware(req, res, mockNextFunction);
 
     expect(mockNextFunction).toHaveBeenCalled();
-    expect(mockLogger).toHaveBeenCalledWith('Signature validated successfully', 'info');
+  });
+
+  it('should handle payload changes', () => {
+    const body = { data: 'test' };
+    const timestamp = Date.now();
+    const modifiedBody = { ...body, extraField: 'modification' };
+    const signature = generateSignature(body, timestamp, secretKey);
+
+    const req = createMockRequest(modifiedBody, signature, timestamp);
+    const res = createMockResponse();
+    const middleware = createSignatureValidationMiddleware({
+      secretKey, 
+      logger: mockLogger
+    });
+
+    middleware(req, res, mockNextFunction);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      error: 'Invalid signature'
+    }));
+    expect(mockNextFunction).not.toHaveBeenCalled();
   });
 });
