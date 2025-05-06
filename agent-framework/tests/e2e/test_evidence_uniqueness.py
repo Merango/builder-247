@@ -1,7 +1,7 @@
 import pytest
 import time
 import uuid
-from prometheus_swarm.tools.uniqueness.implementations import UniqueEvidenceTools
+from prometheus_swarm.uniqueness.tools import UniqueEvidenceTools
 from prometheus_swarm.database.database import SessionLocal
 from prometheus_swarm.database.models import Evidence
 
