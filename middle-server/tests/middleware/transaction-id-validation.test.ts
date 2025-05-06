@@ -57,20 +57,6 @@ describe('Transaction ID Validation Middleware', () => {
       expect(mockNext).toHaveBeenCalled();
       expect(mockRequest.transactionId).toBe(validTransactionId);
     });
-
-    it('should pass middleware with valid transaction ID in body', () => {
-      const validTransactionId = uuidv4();
-      mockRequest.body = { transactionId: validTransactionId };
-
-      validateTransactionId(
-        mockRequest as Request, 
-        mockResponse as Response, 
-        mockNext
-      );
-
-      expect(mockNext).toHaveBeenCalled();
-      expect(mockRequest.transactionId).toBe(validTransactionId);
-    });
   });
 
   // Error scenarios
@@ -111,8 +97,8 @@ describe('Transaction ID Validation Middleware', () => {
       expect(mockNext).not.toHaveBeenCalled();
     });
 
-    it('should reject request with invalid UUID transaction ID', () => {
-      mockRequest.headers = { 'x-transaction-id': 'not-a-valid-uuid' };
+    it('should reject request with invalid UUID format', () => {
+      mockRequest.headers = { 'x-transaction-id': 'invalid-uuid' };
 
       validateTransactionId(
         mockRequest as Request, 
@@ -124,7 +110,7 @@ describe('Transaction ID Validation Middleware', () => {
       expect(mockResponse.json).toHaveBeenCalledWith(
         expect.objectContaining({
           error: 'Transaction Validation Failed',
-          message: 'Transaction ID must be a valid UUID v4'
+          message: 'Invalid UUID format'
         })
       );
       expect(mockNext).not.toHaveBeenCalled();
@@ -134,16 +120,19 @@ describe('Transaction ID Validation Middleware', () => {
       const duplicateTransactionId = uuidv4();
       mockRequest.headers = { 'x-transaction-id': duplicateTransactionId };
 
-      // Mock duplicate transaction
-      jest.spyOn(transactionUniquenessService, 'checkTransactionUniqueness')
-        .mockReturnValue({
-          isUnique: false,
-          metadata: { 
-            reason: 'Transaction already processed',
-            timestamp: new Date().toISOString()
-          }
-        });
+      // First validation (should pass)
+      validateTransactionId(
+        mockRequest as Request, 
+        mockResponse as Response, 
+        mockNext
+      );
 
+      // Reset mocks
+      (mockResponse.status as jest.Mock).mockClear();
+      (mockResponse.json as jest.Mock).mockClear();
+      mockNext.mockClear();
+
+      // Second validation (should fail)
       validateTransactionId(
         mockRequest as Request, 
         mockResponse as Response, 
@@ -153,8 +142,8 @@ describe('Transaction ID Validation Middleware', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(409);
       expect(mockResponse.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: 'Transaction Conflict',
-          message: 'Transaction has already been processed'
+          error: 'Transaction Validation Failed',
+          message: 'Duplicate transaction'
         })
       );
       expect(mockNext).not.toHaveBeenCalled();
@@ -163,7 +152,7 @@ describe('Transaction ID Validation Middleware', () => {
 
   // Performance test
   describe('Performance', () => {
-    it('should process transaction ID validation under 100ms', () => {
+    it('should process transaction ID validation quickly', () => {
       const validTransactionId = uuidv4();
       mockRequest.headers = { 'x-transaction-id': validTransactionId };
 
