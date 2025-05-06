@@ -1,95 +1,63 @@
 import { Request, Response, NextFunction } from 'express';
-import { v4 as uuidValidate } from 'uuid';
-import { TransactionUniquenessService } from '../services/transaction/transaction-uniqueness.service';
-import { Logger } from '../utils/logger';
-
-const logger = new Logger('TransactionIdValidationMiddleware');
+import { TransactionUniquenessService, TransactionValidationResult } from '../services/transaction/transaction-uniqueness.service';
 
 /**
- * Middleware for transaction ID validation
+ * Validate transaction ID middleware
  * @param req Express request object
  * @param res Express response object
  * @param next Express next middleware function
  */
 export const validateTransactionId = (req: Request, res: Response, next: NextFunction) => {
-  const startTime = Date.now();
   const transactionUniquenessService = TransactionUniquenessService.getInstance();
 
-  // Possible locations for transaction ID
-  const transactionIdSources = [
-    req.headers['x-transaction-id'],   // Header
-    req.query.transactionId,           // Query parameter
-    req.body?.transactionId            // Request body
-  ];
+  // Find transaction ID from different sources
+  const transactionId = req.headers['x-transaction-id'] 
+    || req.query.transactionId 
+    || req.body?.transactionId;
 
-  // Find the first non-null transaction ID
-  const transactionId = transactionIdSources.find(id => id !== undefined && id !== null);
-
-  // Check if transaction ID is missing
+  // Validate transaction ID presence
   if (!transactionId) {
-    logger.warn('Transaction ID is missing', { 
-      path: req.path,
-      method: req.method 
-    });
     return res.status(400).json({
       error: 'Transaction Validation Failed',
       message: 'Transaction ID is required',
       details: {
-        supportedLocations: ['x-transaction-id header', 'transactionId query param', 'transactionId in body']
+        supportedLocations: [
+          'x-transaction-id header', 
+          'transactionId query param', 
+          'transactionId in body'
+        ]
       }
     });
   }
 
-  // Validate transaction ID is a string
+  // Ensure transaction ID is a string
   if (typeof transactionId !== 'string') {
-    logger.warn('Invalid transaction ID type', { 
-      path: req.path,
-      method: req.method,
-      receivedType: typeof transactionId
-    });
     return res.status(400).json({
       error: 'Transaction Validation Failed',
-      message: 'Transaction ID must be a string'
+      message: 'Transaction ID must be a string',
+      details: {
+        receivedType: typeof transactionId
+      }
     });
   }
 
-  // Validate transaction ID is a valid UUID v4
-  if (!uuidValidate(transactionId)) {
-    logger.warn('Invalid transaction ID format', { 
-      path: req.path,
-      method: req.method,
-      transactionId 
-    });
-    return res.status(400).json({
+  // Validate transaction
+  const validationResult: TransactionValidationResult = 
+    transactionUniquenessService.validateTransaction(transactionId);
+
+  // Handle validation result
+  if (!validationResult.isValid) {
+    const statusCode = validationResult.reason === 'Duplicate transaction' ? 409 : 400;
+    
+    return res.status(statusCode).json({
       error: 'Transaction Validation Failed',
-      message: 'Transaction ID must be a valid UUID v4'
+      message: validationResult.reason || 'Invalid transaction',
+      details: validationResult.metadata
     });
   }
 
-  // Check transaction uniqueness
-  const uniquenessResult = transactionUniquenessService.checkTransactionUniqueness(transactionId);
-  
-  if (!uniquenessResult.isUnique) {
-    logger.warn('Duplicate transaction detected', { 
-      transactionId,
-      metadata: uniquenessResult.metadata 
-    });
-    return res.status(409).json({
-      error: 'Transaction Conflict',
-      message: 'Transaction has already been processed',
-      details: uniquenessResult.metadata
-    });
-  }
-
-  // Attach the validated transaction ID to the request
+  // Attach validated transaction ID to request
   req.transactionId = transactionId;
-
-  // Log performance
-  const processingTime = Date.now() - startTime;
-  logger.info('Transaction ID validated successfully', { 
-    transactionId, 
-    processingTime 
-  });
 
   // Proceed to next middleware
   next();
