@@ -1,80 +1,76 @@
 import pytest
-from prometheus_swarm.database.models import Evidence
 from prometheus_swarm.database.database import SessionLocal
-from sqlalchemy.exc import IntegrityError
-from typing import Dict, Any
+from prometheus_swarm.utils.evidence_validator import EvidenceValidator
+from prometheus_swarm.tools.uniqueness.implementations import UniqueEvidenceTools
+import uuid
+import time
 
 class TestEvidenceUniqueness:
     @pytest.fixture
-    def db_session(self):
-        """Create a database session for testing."""
-        session = SessionLocal()
-        yield session
-        session.close()
+    def evidence_validator(self):
+        return EvidenceValidator()
 
-    def test_create_unique_evidence(self, db_session):
-        """Test creating unique evidence."""
-        unique_evidence = Evidence(
-            source="test_source",
-            content="unique test content",
-            context="integration_test",
-            hash="unique_hash_1"
-        )
-        db_session.add(unique_evidence)
-        db_session.commit()
-        
-        # Verify evidence was saved
-        saved_evidence = db_session.query(Evidence).filter_by(hash="unique_hash_1").first()
-        assert saved_evidence is not None
-        assert saved_evidence.content == "unique test content"
-
-    def test_duplicate_evidence_prevention(self, db_session):
-        """Test preventing duplicate evidence based on hash."""
-        # Create first evidence
-        first_evidence = Evidence(
-            source="test_source",
-            content="duplicate test content",
-            context="integration_test",
-            hash="duplicate_hash"
-        )
-        db_session.add(first_evidence)
-        db_session.commit()
-
-        # Try to create evidence with same hash (should raise error)
-        duplicate_evidence = Evidence(
-            source="another_source",
-            content="different content",
-            context="integration_test",
-            hash="duplicate_hash"
-        )
-        with pytest.raises(IntegrityError):
-            db_session.add(duplicate_evidence)
-            db_session.commit()
-
-    def test_evidence_context_tracking(self, db_session):
-        """Test evidence tracking across different contexts."""
-        evidence_data = [
-            {
-                "source": "source_1",
-                "content": "content_1",
-                "context": "context_a",
-                "hash": "hash_1"
-            },
-            {
-                "source": "source_2",
-                "content": "content_2",
-                "context": "context_b",
-                "hash": "hash_2"
+    @pytest.fixture
+    def unique_evidence_generator(self):
+        def _generate_evidence(source=None, content=None, context=None):
+            unique_id = str(uuid.uuid4())
+            return {
+                'source': source or f'test_source_{unique_id}',
+                'content': content or f'test_content_{unique_id}',
+                'context': context or f'test_context_{unique_id}',
+                'timestamp': str(time.time())
             }
-        ]
+        return _generate_evidence
 
-        for data in evidence_data:
-            evidence = Evidence(**data)
-            db_session.add(evidence)
-        db_session.commit()
+    def test_evidence_hash_generation(self, evidence_validator, unique_evidence_generator):
+        """Test deterministic hash generation."""
+        evidence_data = unique_evidence_generator()
+        hash1 = evidence_validator.generate_evidence_hash(evidence_data)
+        hash2 = evidence_validator.generate_evidence_hash(evidence_data)
+        
+        assert hash1 == hash2, "Hash should be consistent for same evidence"
 
-        # Verify each evidence was saved in its specific context
-        for data in evidence_data:
-            saved_evidence = db_session.query(Evidence).filter_by(hash=data['hash']).first()
-            assert saved_evidence is not None
-            assert saved_evidence.context == data['context']
+    def test_unique_evidence_creation(self, evidence_validator, unique_evidence_generator):
+        """Test creating unique evidence."""
+        with SessionLocal() as session:
+            evidence_data = unique_evidence_generator()
+            evidence = evidence_validator.validate_evidence_uniqueness(session, evidence_data)
+            
+            assert evidence is not None, "Unique evidence should be created"
+            assert evidence.hash is not None, "Evidence should have a hash"
+
+    def test_duplicate_evidence_prevention(self, evidence_validator, unique_evidence_generator):
+        """Test preventing duplicate evidence."""
+        with SessionLocal() as session:
+            evidence_data = unique_evidence_generator()
+            
+            # First submission
+            first_evidence = evidence_validator.validate_evidence_uniqueness(session, evidence_data)
+            assert first_evidence is not None, "First evidence should be created"
+            
+            # Second submission (should be rejected)
+            second_evidence = evidence_validator.validate_evidence_uniqueness(session, evidence_data)
+            assert second_evidence is None, "Duplicate evidence should be rejected"
+
+    def test_concurrent_submission_simulation(self):
+        """Test concurrent evidence submission."""
+        unique_tools = UniqueEvidenceTools()
+        results = unique_tools.simulate_concurrent_submissions(
+            evidence_count=50, 
+            concurrency_level=5
+        )
+        
+        assert results['total_processed'] == 50, "All evidence should be processed"
+        assert results['unique_count'] == results['total_processed'], "All evidence should be unique"
+        assert results['duplicate_count'] == 0, "No duplicates should exist"
+
+    def test_performance_metrics(self):
+        """Test performance metrics retrieval."""
+        unique_tools = UniqueEvidenceTools()
+        metrics = unique_tools.get_performance_metrics()
+        
+        assert 'total_evidence_count' in metrics
+        assert 'validation_overhead' in metrics
+        assert 'max_concurrent_validations' in metrics
+        
+        assert metrics['validation_overhead'] < 0.01, "Validation overhead should be minimal"
