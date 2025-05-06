@@ -1,81 +1,97 @@
 import pytest
-import hashlib
+import time
 import uuid
-from prometheus_swarm.database.models import Evidence
+from prometheus_swarm.tools.uniqueness.implementations import UniqueEvidenceTools
 from prometheus_swarm.database.database import SessionLocal
-from prometheus_swarm.workflows.audit.workflow import AuditWorkflow
+from prometheus_swarm.database.models import Evidence
 
 class TestEvidenceUniquenessE2E:
     @pytest.fixture
     def unique_evidence_generator(self):
-        """Generate unique evidence for testing."""
-        def _generate_evidence(content=None, source=None, context=None):
+        def _generate_evidence(context=None):
             unique_id = str(uuid.uuid4())
-            content = content or f"Test Evidence {unique_id}"
-            source = source or "e2e_test_source"
-            context = context or "e2e_test_context"
-            
-            hash_content = hashlib.sha256(f"{content}:{source}:{context}".encode()).hexdigest()
-            
             return {
-                "source": source,
-                "content": content,
-                "context": context,
-                "hash": hash_content
+                'source': f'e2e_source_{unique_id}',
+                'content': f'e2e_content_{unique_id}',
+                'context': context or 'e2e_test_context',
+                'timestamp': str(time.time())
             }
         return _generate_evidence
 
-    def test_audit_workflow_evidence_uniqueness(self, unique_evidence_generator):
+    def test_cross_context_evidence_processing(self, unique_evidence_generator):
         """
-        End-to-end test to verify evidence uniqueness in audit workflow.
-        
-        Scenario:
-        1. Generate multiple pieces of evidence
-        2. Run audit workflow
-        3. Verify each piece of evidence is tracked uniquely
+        Verify evidence processing across multiple contexts.
         """
-        audit_workflow = AuditWorkflow()
+        unique_tools = UniqueEvidenceTools()
+        contexts = ['task_audit', 'code_review', 'submission_review']
         
-        # Generate multiple evidence
-        evidence_list = [
-            unique_evidence_generator() for _ in range(5)
+        # Generate evidence for each context
+        evidence_batch = [
+            {**unique_evidence_generator(context=context), 'context': context}
+            for context in contexts
         ]
         
-        # Simulate audit workflow processing
-        processed_evidences = []
-        for evidence_data in evidence_list:
-            processed_evidence = audit_workflow.process_evidence(evidence_data)
-            processed_evidences.append(processed_evidence)
+        # Process evidence batch
+        results = unique_tools.process_evidence_batch(evidence_batch)
         
-        # Verify processed evidences
+        # Verify results
+        assert results['total_processed'] == len(contexts)
+        assert results['unique_count'] == len(contexts)
+        assert results['duplicate_count'] == 0
+        
+        # Verify database state
         with SessionLocal() as session:
-            for processed_evidence in processed_evidences:
-                db_evidence = session.query(Evidence).filter_by(hash=processed_evidence.hash).first()
-                assert db_evidence is not None, f"Evidence with hash {processed_evidence.hash} not found"
+            for evidence_data in evidence_batch:
+                db_evidence = session.query(Evidence).filter_by(
+                    hash=unique_tools.validator.generate_evidence_hash(evidence_data)
+                ).first()
                 
-                # Check for duplicates
-                duplicate_count = session.query(Evidence).filter_by(hash=processed_evidence.hash).count()
-                assert duplicate_count == 1, f"Duplicate evidence found for hash {processed_evidence.hash}"
-
-    def test_cross_context_evidence_tracking(self, unique_evidence_generator):
-        """
-        Verify evidence tracking across different workflow contexts.
-        
-        Scenario:
-        1. Generate evidence for multiple contexts
-        2. Process each evidence
-        3. Verify unique tracking
-        """
-        contexts = ["task_audit", "code_review", "submission_review"]
-        
-        processed_evidences = []
-        for context in contexts:
-            evidence_data = unique_evidence_generator(context=context)
-            processed_evidence = AuditWorkflow().process_evidence(evidence_data)
-            processed_evidences.append(processed_evidence)
-        
-        with SessionLocal() as session:
-            for processed_evidence in processed_evidences:
-                db_evidence = session.query(Evidence).filter_by(hash=processed_evidence.hash).first()
                 assert db_evidence is not None
                 assert db_evidence.context in contexts
+
+    def test_high_concurrency_evidence_processing(self):
+        """
+        Test high concurrency evidence processing.
+        """
+        unique_tools = UniqueEvidenceTools()
+        
+        # Simulate high volume, high concurrency scenario
+        results = unique_tools.simulate_concurrent_submissions(
+            evidence_count=200,  # High volume
+            concurrency_level=10  # High concurrency
+        )
+        
+        # Performance and correctness assertions
+        assert results['total_processed'] == 200
+        assert results['unique_count'] == 200
+        assert results['duplicate_count'] == 0
+        assert results['total_time'] < 5.0  # Should complete quickly
+        
+        # Performance metric checks
+        performance_metrics = unique_tools.get_performance_metrics()
+        assert performance_metrics['max_concurrent_validations'] >= 10
+        assert performance_metrics['validation_overhead'] < 0.01
+
+    def test_long_running_evidence_tracking(self):
+        """
+        Simulate long-running evidence tracking with intermittent submissions.
+        """
+        unique_tools = UniqueEvidenceTools()
+        total_submissions = 500
+        
+        evidence_batch = [
+            {
+                'source': f'long_running_source_{i}',
+                'content': f'long_running_content_{i}',
+                'context': 'long_running_test',
+                'timestamp': str(time.time() + i)  # Slight time variation
+            } for i in range(total_submissions)
+        ]
+        
+        results = unique_tools.process_evidence_batch(evidence_batch)
+        
+        # Comprehensive assertions
+        assert results['total_processed'] == total_submissions
+        assert results['unique_count'] == total_submissions
+        assert results['duplicate_count'] == 0
+        assert not results['errors']  # No processing errors
