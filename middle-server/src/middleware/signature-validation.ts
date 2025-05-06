@@ -1,16 +1,28 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 
+interface SignatureValidationOptions {
+  signatureHeader?: string;
+  timestampHeader?: string;
+  signatureMaxAge?: number;
+  logger?: (message: string, level?: 'info' | 'error') => void;
+}
+
 /**
  * Signature Validation Middleware
  * Validates the signature of incoming requests to ensure data integrity and authenticity
  */
 export const signatureValidationMiddleware = (
   secretKey: string,
-  signatureHeader: string = 'x-signature',
-  timestampHeader: string = 'x-timestamp',
-  signatureMaxAge: number = 5 * 60 * 1000 // 5 minutes
+  options: SignatureValidationOptions = {}
 ) => {
+  const {
+    signatureHeader = 'x-signature',
+    timestampHeader = 'x-timestamp',
+    signatureMaxAge = 5 * 60 * 1000, // 5 minutes
+    logger = console.log
+  } = options;
+
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       // Extract signature, timestamp, and request body
@@ -19,6 +31,7 @@ export const signatureValidationMiddleware = (
 
       // Check if signature or timestamp are missing
       if (!signature || !timestampStr) {
+        logger('Missing signature or timestamp', 'error');
         return res.status(401).json({ 
           error: 'Missing signature or timestamp' 
         });
@@ -29,6 +42,7 @@ export const signatureValidationMiddleware = (
       // Check timestamp validity
       const currentTime = Date.now();
       if (isNaN(timestamp) || Math.abs(currentTime - timestamp) > signatureMaxAge) {
+        logger('Invalid or expired timestamp', 'error');
         return res.status(401).json({ 
           error: 'Invalid or expired timestamp' 
         });
@@ -43,20 +57,23 @@ export const signatureValidationMiddleware = (
         .update(payload)
         .digest('hex');
 
-      // Compare signatures
-      if (!crypto.timingSafeEqual(
-        Buffer.from(signature),
-        Buffer.from(computedSignature)
-      )) {
+      // Compare signatures with constant-time comparison
+      const isValidSignature = computedSignature === signature;
+
+      if (!isValidSignature) {
+        logger('Invalid signature', 'error');
         return res.status(401).json({ 
           error: 'Invalid signature' 
         });
       }
 
+      // Log successful validation
+      logger('Signature validated successfully', 'info');
+
       // Signature is valid, proceed to next middleware
       next();
     } catch (error) {
-      console.error('Signature validation error:', error);
+      logger(`Signature validation error: ${error}`, 'error');
       res.status(500).json({ 
         error: 'Internal server error during signature validation' 
       });
